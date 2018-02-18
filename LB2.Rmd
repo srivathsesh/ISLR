@@ -1,0 +1,83 @@
+---
+title: "Lab2"
+author: "Sri Seshadri"
+date: "1/21/2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(MASS)
+```
+
+```{r}
+head(Boston)
+lm.mdl <- lm(medv~lstat,data = Boston)
+summary(lm.mdl)
+anova(lm.mdl)
+```
+
+```{r}
+coef(lm.mdl)
+confint(lm.mdl)
+plot(predict.lm(lm.mdl),lm.mdl$fitted.values)
+which.max(hatvalues(lm.mdl))
+plot(Boston$lstat, Boston$medv, col = "red")
+abline(lm.mdl,lty = 1,col= "red")
+par(mfrow = c(2,2))
+plot(lm.mdl)
+
+lm.mdl2 <- lm(medv ~ lstat + age, data = Boston)
+summary(lm.mdl2)
+
+lm(medv ~ ., data = Boston)
+
+lm.mdl3 <- lm(medv ~ lstat * age, data = Boston)
+summary(lm.mdl3)
+
+lm.mdl4 <- lm(medv ~ lstat + I(lstat^2), data = Boston)
+summary(lm.mdl4)
+par(mfrow = c(2,2))
+plot(lm.mdl4)
+
+anova(lm.mdl,lm.mdl4)
+
+summary(lm(medv ~ poly(lstat,4),data = Boston))
+
+```
+
+```{r}
+lm.mdl5 <- lm(Sales ~ . + Income * Advertising + Price:Age, data = Carseats)
+summary(lm.mdl5)
+```
+```{r}
+lm.mdl6 <- lm(Sales ~ . + Income * Advertising + Price:Age, data = Carseats, contrasts = list(ShelveLoc=contr.treatment(c("Bad", "Good", "Medium"), base = 3)))
+summary(lm.mdl6)
+round(coef(lm.mdl6),2)
+```
+
+```{r}
+X1 = c(3, 2, 4, 0)
+Y = c(4, 1, 3, 1)
+X2 =  X1*2
+qz1 <- lm(Y ~ X1)
+summary(qz1)
+anova(qz1)
+(Y - X1)^2
+sum(residuals(qz1)^2)
+broom::augment(qz1)
+qz3 <- lm(Y ~ X1 + X2)
+summary(qz3)
+anova(qz3)
+S = 2 * Y
+anova(lm(Y~S))
+```
+
+```{r}
+GPA = 4
+IQ = 110
+G = 1
+sal = 50 + 20*GPA + 0.07 * IQ + 35*G + 0.01*GPA*IQ - 10*GPA*G
+sal
+```
+

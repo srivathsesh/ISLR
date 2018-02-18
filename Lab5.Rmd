@@ -1,0 +1,195 @@
+---
+title: "Untitled"
+author: "Sri Seshadri"
+date: "2/11/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+```
+
+# Non - linear modeling
+
+## 7.8.1 Polynomial regression and step functions page 288
+
+```{r}
+Wage <- ISLR::Wage
+fit <- lm(wage ~ poly(age,4), data = Wage)
+summary(fit)
+ggplot(data = Wage, mapping = aes(x = age, y = wage)) + geom_point() + stat_smooth(formula = formula(fit),col = "black") + theme_bw() + stat_smooth(col = "red",se = F, formula = wage ~ age)
+```
+
+```{r}
+fit2 <- lm(wage ~ poly(age,4,raw = T), data = Wage)
+summary(fit)
+fit2.a <- lm(wage ~ age + I(age^2) + I(age^3) + I(age^4), data = Wage)
+summary(fit.a)
+fit2.b <- lm(wage ~ cbind(age,age^2,age^3,age^4), data = Wage)
+summary(fit.b)
+```
+
+```{r}
+agelims <- range(Wage$age)
+age.grid <- seq(agelims[1],agelims[2])
+preds <- predict(fit,newdata = list(age = age.grid),se.fit = T)
+se.bands <- cbind(preds$fit - 2*preds$se.fit, preds$fit + 2*preds$se.fit)
+plot(Wage$age, Wage$wage,xlim = agelims,cex = 0.5, col = "darkgrey")
+lines(age.grid,preds$fit,lwd =2 , col = "blue")
+matlines(age.grid,se.bands,lwd = 1, col = "blue", lty = 3)
+
+preds2 <- predict(fit2,newdata = list(age = age.grid),se.fit = T)
+max(abs(preds$fit - preds2$fit))
+cor(preds$fit, preds2$fit)
+
+```
+
+```{r}
+lmfit <- function(data,response,predictor,poly){
+  library(dplyr)
+  text = paste0("lm(",response,"~","poly(",predictor,",",poly,"),data = data)")
+  eval(parse(text = text))
+}
+
+fits <- purrr::pmap(.l = list(data = list(Wage),response = "wage", predictor = "age", poly = seq(1:5)),.f = lmfit)
+anova(fits[[1]], fits[[2]], fits[[3]], fits[[4]], fits[[5]])
+
+summary(fits[[5]])
+```
+
+```{r}
+fit.1 <- lm(wage ~ education + age, data = Wage)
+fit.2 <- lm(wage ~ education + poly(age,2), data = Wage)
+fit.3 <- lm(wage ~ education + poly(age,3), data = Wage)
+anova(fit.1,fit.2,fit.3)
+```
+
+```{r}
+# For quiz q2
+summary(fit.3)
+```
+
+
+```{r}
+fit.logistic <- glm(I(wage > 250) ~ poly(age,4), data = Wage,family = "binomial")
+summary(fit.logistic)
+preds.logistic <- predict(fit.logistic,newdata = list(age = age.grid), se = T)
+plot(exp(preds.logistic$fit),age.grid)
+preds.logistic2 <- predict(fit.logistic,newdata = list(age = age.grid), se = T,type = "response")
+plot(preds.logistic2$fit,age.grid)
+
+
+```
+```{r}
+table(cut(Wage$age,4))
+step.fit <- lm(wage ~ cut(age,4), data = Wage)
+plot(step.fit$fitted.values~Wage$age)
+```
+
+```{r}
+# For quiz q3
+table(cut(Wage$wage,breaks = c(0,25,40,60,80)))
+step.fit.1 <- lm(wage ~ cut(Wage$age,c(0,25,40,60,80)), data = Wage)
+plot(Wage$age,step.fit.1$fitted.values)
+```
+
+# Splines
+
+```{r}
+library(splines)
+fit.spl <- lm(wage ~ bs(age,knots = c(25,40,60)), data= Wage)
+summary(fit.spl)
+pred.spl <- predict(fit.spl,newdata = list(age = age.grid), se = T)
+plot(Wage$wage ~ Wage$age, col = "gray")
+lines(age.grid,pred.spl$fit,lwd = 2)
+lines(age.grid,pred.spl$fit + pred.spl$se.fit*2, lty = "dashed")
+lines(age.grid,pred.spl$fit - pred.spl$se.fit*2, lty = "dashed")
+
+
+# ggplot(data = Wage, mapping = aes(x = age, y = wage)) + geom_point(col = "grey") + stat_smooth(formula = formula(fit.spl)) + theme_classic()
+```
+
+```{r}
+dim(bs(Wage$age, knots = c(25,40,60)))
+attr(bs(Wage$age,df = 6),"knots")
+```
+
+## Natural splines
+
+```{r}
+fit.nspl <- lm(wage ~ ns(age,df = 4), data = Wage)
+pred2 <- predict(fit.nspl, newdata = list(age = age.grid), se = T)
+plot(Wage$wage ~ Wage$age, col = "gray")
+lines(age.grid,pred.spl$fit,lwd = 2)
+lines(age.grid,pred.spl$fit + pred.spl$se.fit*2, lty = "dashed")
+lines(age.grid,pred.spl$fit - pred.spl$se.fit*2, lty = "dashed")
+lines(age.grid,pred2$fit, col ="red",lwd = 2)
+```
+
+## Smoothing splines
+
+```{r}
+plot(Wage$wage ~ Wage$age, xlim = agelims, cex = 0.5, col = "grey")
+fit.smsp <- smooth.spline(Wage$age,Wage$wage, df = 16)
+fit.smsp2 <- smooth.spline(Wage$age, Wage$wage,cv = T)
+summary(fit.smsp)
+fit.smsp2$df
+lines(fit.smsp, col = "red", lwd = 2)
+lines(fit.smsp2, col = "blue", lwd = 2)
+legend("topright", legend = c("16 DF", "CV DF"), col = c("red", "blue"),lwd =2,inset = 0)
+```
+
+## Local regression
+
+```{r}
+plot(Wage$wage ~ Wage$age, col = "gray",cex = 0.5)
+fit.loess <- loess(wage~age, data = Wage,span = 0.2)
+fit.loess.1 <- loess(wage ~ age, data = Wage, span = 0.5)
+lines(age.grid,predict(fit.loess,newdata = data.frame(age = age.grid)),col = "red", lwd = 2)
+lines(age.grid,predict(fit.loess.1,newdata = data.frame(age = age.grid)),col = "blue", lwd = 2)
+```
+
+# GAM
+
+```{r}
+library(gam)
+gam1 <- lm(wage~ns(year,df = 4) + ns(age,5) + education, data = Wage)
+plot.gam(gam1, se = T , col = "red")
+gam2 <- gam(wage ~ s(year,df = 4) + s(age,df = 5) + education, data = Wage)
+plot(gam2)
+anova(gam2)
+```
+
+```{r}
+gam.m1 <- gam(wage ~ s(age,5) + education, data = Wage)
+gam.m2 <- gam(wage ~ year + s(age,5) + education, data = Wage)
+anova(gam.m1,gam.m2,gam2)
+
+```
+
+```{r}
+preds.gam <- predict(gam.m2,newdata = Wage)
+gam.lo <- gam(wage ~ s(year,4) + lo(age,span = 0.7) + education, data = Wage)
+plot.gam(gam.lo,col = "red",se = T)
+
+# interactions with year and age
+
+gam.lo.1 <- gam(wage ~ lo(age,year,span = 0.5) + education, data = Wage)
+plot(gam.lo.1, se = T, col = "green")
+```
+
+```{r}
+gam.lr <- gam(I(wage > 250) ~ year + s(age,df = 5) + education, family = "binomial",data = Wage)
+plot(gam.lr,se= T, col = "green")
+table(Wage$education,I(Wage$wage > 250))
+gam.lr <- gam(I(wage > 250) ~ year + s(age,df = 5) + education, family = "binomial",data = Wage, subset = (education != "1. < HS Grad"))
+plot(gam.lr,se= T, col = "green")
+```
+
+# Quiz
+
+```{r}
+
+```
+

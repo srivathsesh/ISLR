@@ -1,0 +1,152 @@
+---
+title: "Lab3"
+author: "Sri Seshadri"
+date: "1/27/2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Validation set approach
+
+```{r}
+set.seed(1)
+library(ISLR)
+data(Auto)
+train <- sample(392,196)
+lmfit<- lm(mpg~horsepower, data = Auto, subset = train)
+
+mean((Auto$mpg[-train] -  predict(lmfit,newdata = Auto[-train,]))^2)
+
+lmfit2 <- lm(mpg~poly(horsepower,2), data = Auto, subset = train)
+mean((Auto$mpg[-train] -  predict(lmfit2,newdata = Auto[-train,]))^2)
+
+lmfit3 <- lm(mpg~poly(horsepower,3), data = Auto, subset = train)
+mean((Auto$mpg[-train] -  predict(lmfit3,newdata = Auto[-train,]))^2)
+```
+```{r}
+set.seed(2)
+library(ISLR)
+data(Auto)
+train <- sample(392,196)
+lmfit<- lm(mpg~horsepower, data = Auto, subset = train)
+
+mean((Auto$mpg[-train] -  predict(lmfit,newdata = Auto[-train,]))^2)
+
+lmfit2 <- lm(mpg~poly(horsepower,2), data = Auto, subset = train)
+mean((Auto$mpg[-train] -  predict(lmfit2,newdata = Auto[-train,]))^2)
+
+lmfit3 <- lm(mpg~poly(horsepower,3), data = Auto, subset = train)
+mean((Auto$mpg[-train] -  predict(lmfit3,newdata = Auto[-train,]))^2)
+```
+
+# Leave one out cross validation (LOOCV)
+
+```{r}
+library(boot)
+glmfit <- glm(mpg~horsepower, data = Auto)
+summary(glmfit)
+cv.glm(data = Auto,glmfit = glmfit)
+```
+
+```{r}
+cv.error <- rep(0,5)
+for (i in 1:5){
+  glmfit <- glm(mpg~poly(horsepower,i), data = Auto)
+  cv.error[i] <- cv.glm(data = Auto,glmfit = glmfit)$delta[1]
+}
+cv.error
+```
+# K-fold cross validation
+
+```{r}
+set.seed(17)
+cv.error.10 <- rep(0,10)
+for (i in 1:10){
+  glmfit <- glm(mpg~poly(horsepower,i), data = Auto)
+  cv.error.10[i] <- cv.glm(data = Auto,glmfit = glmfit, K = 10)$delta[1]
+}
+plot(cv.error.10,type = "b", col = "red")
+```
+
+# Bootstap
+
+```{r}
+boot.fn <- function(data,index){
+  return(coef(lm(mpg~horsepower,data = data,subset = index)))
+}
+set.seed(1)
+boot.fn(Auto,sample(392,392,replace = T))
+
+boot(Auto,boot.fn,1000)
+summary(lm(mpg~horsepower, data = Auto))
+```
+```{r}
+boot.fn <- function(data,index){
+  return(coef(lm(mpg~horsepower+I(horsepower^2),data = data,subset = index)))
+}
+set.seed(1)
+boot.fn(Auto,sample(392,392,replace = T))
+
+boot(Auto,boot.fn,1000)
+summary(lm(mpg~horsepower+I(horsepower^2), data = Auto))
+```
+```{r}
+set.seed(3)
+library(ISLR)
+data(Auto)
+train <- sample(392,196)
+lmfit<- lm(mpg~horsepower, data = Auto, subset = train)
+
+round(mean((Auto$mpg[-train] -  predict(lmfit,newdata = Auto[-train,]))^2),2)
+
+lmfit2 <- lm(mpg~poly(horsepower,2), data = Auto, subset = train)
+round(mean((Auto$mpg[-train] -  predict(lmfit2,newdata = Auto[-train,]))^2),2)
+
+lmfit3 <- lm(mpg~poly(horsepower,3), data = Auto, subset = train)
+round(mean((Auto$mpg[-train] -  predict(lmfit3,newdata = Auto[-train,]))^2),2)
+```
+
+```{r}
+library(boot)
+glmfit <- glm(mpg~poly(horsepower,6), data = Auto)
+summary(glmfit)
+round(cv.glm(data = Auto,glmfit = glmfit)$delta[1],2)
+```
+
+```{r}
+set.seed(17)
+cv.error.10 <- rep(0,10)
+for (i in 1:10){
+  glmfit <- glm(mpg~poly(horsepower,i), data = Auto)
+  cv.error.10[i] <- cv.glm(data = Auto,glmfit = glmfit, K = 5)$delta[1]
+}
+round(cv.error.10[1:10],2)
+
+```
+
+```{r}
+alpha.fn <- function(data,index){
+  X = data$X[index]
+  Y = data$Y[index]
+  return((var(Y)-cov(X,Y))/(var(X) + var(Y) - 2*cov(X,Y)))
+}
+set.seed(2)
+boot(Portfolio,alpha.fn,R = 1000)
+```
+
+```{r}
+boot.fn <- function(data,index){
+  return(coef(lm(mpg~horsepower+I(horsepower^2),data = data,subset = index)))
+}
+set.seed(2)
+#boot.fn(Auto,sample(392,392,replace = T))
+
+boot(Auto,boot.fn,1000)
+
+
+summary(lm(mpg~horsepower+I(horsepower^2), data = Auto))
+```
+

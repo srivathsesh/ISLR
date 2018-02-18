@@ -1,0 +1,160 @@
+---
+title: "Lab6"
+author: "Sri Seshadri"
+date: "2/17/2018"
+output:
+  ioslides_presentation: default
+  beamer_presentation: default
+  slidy_presentation: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,tidy.opts=list(width.cutoff=60),tidy=TRUE)
+library(ISLR)
+library(dplyr)
+library(broom)
+```
+
+## Lab 6 - Logistic regression, LDA, QDA and KNN
+
+
+##  4.6.1 The stock Market Data
+
+Dataset used Smarket from the ISLR library; the data contains
+
+  - For each date, % returns of each of the five previous days were recorded.(Lag 1 thru 5)
+  - Volume - the number of shares traded on the previous day in billions
+  - Today - the % return on the date in question
+  - Direction - market went up or down on this date?
+
+## Data inspection {.smaller .flexbox .vcenter}
+
+```{r cars, echo = TRUE,collapse=TRUE}
+Smarket <- Smarket
+skimr::skim(Smarket)
+```
+
+## Explore variables
+
+```{r Smarket}
+pairs(Smarket,cex = 0.5, col = c("grey"))
+```
+
+## Correlations
+
+```{r, echo=T}
+numericcols <- sapply(Smarket,is.numeric)
+correlations <- cor(Smarket[,numericcols])
+corrplot::corrplot(correlations,method = "ellipse")
+```
+
+## Correlations with Direction {.smaller}
+
+```{r, echo=T}
+Smarket$Direction <- as.numeric(Smarket$Direction)
+par(mfrow = c(1,2))
+corrplot::corrplot(cor(Smarket), method = 'ellipse')
+beanplot::beanplot(Volume~Year, data = Smarket,lab = "year", ylab = "Volume", col = "grey")
+```
+
+## 4.6.2 Logistic Regression {.smaller}
+
+*Remember*  The model fits the log odds or logit. The output need do be "unlogitted"
+```{r, echo=T}
+# Make Direction a factor variable again; simply reload the data from package
+Smarket <- ISLR::Smarket
+glm.fit <- glm(Direction ~ Lag1 + Lag2 + Lag3 + Lag4 + Lag5 + Volume , family = 'binomial',data = Smarket)
+summary(glm.fit)
+
+# significance of fit
+1- pchisq(glm.fit$null.deviance - glm.fit$deviance,glm.fit$df.null - glm.fit$df.residual)
+
+```
+
+## Predict() usage
+
+```{r, echo=T}
+glm.probs <- predict(glm.fit, type = "response")
+head(glm.probs)
+
+# probability of direction going up or down? What did R do... it created a dummy variable with Up as 1 and down as zero
+contrasts(Smarket$Direction)
+```
+
+## Confusion Matrix {.smaller}
+
+```{r}
+glm.pred <- rep("Down", nrow(Smarket))
+glm.pred[glm.probs > 0.5] <- "Up"
+# now the confusion matrix
+caret::confusionMatrix(glm.pred,reference = Smarket$Direction, positive = "Up")
+```
+
+## Leave 2005 data as hold out set {.smaller}
+
+```{r}
+train <- Smarket$Year < 2005
+glm.fit <- glm(Direction ~ Lag1 + Lag2 + Lag3 + Lag4 + Lag5 + Volume, data = Smarket, family = 'binomial',subset = train)
+summary(glm.fit)
+
+glm.probs <- predict(glm.fit, newdata = Smarket[!train,], type = "response")
+
+glm.pred <- rep("Down", nrow(Smarket[!train,]))
+glm.pred[glm.probs > 0.5] <- "Up"
+
+caret::confusionMatrix(glm.pred, reference = Smarket$Direction[!train], positive = "Up")
+```
+
+## Use Lag 1 & 2 as predictors {.smaller}
+
+Since Lag 1 & Lag 2 had the least p values, lets try using those alone as predictors.
+
+```{r}
+glm.fit <- glm(Direction ~ Lag1 + Lag2, data = Smarket, family = 'binomial',subset = train)
+summary(glm.fit)
+
+glm.probs <- predict(glm.fit, newdata = Smarket[!train,], type = "response")
+
+glm.pred <- rep("Down", nrow(Smarket[!train,]))
+glm.pred[glm.probs > 0.5] <- "Up"
+
+caret::confusionMatrix(glm.pred, reference = Smarket$Direction[!train], positive = "Up")
+```
+
+## Prediction for certain lags
+
+```{r}
+predict(glm.fit,newdata = data.frame(Lag1 = c(1.2,1.5), Lag2 = c(1.1,-0.8)), type = "response")
+```
+
+## 4.6.3 Linear Discriminant Analysis {.smaller}
+
+LDA is best when the assumption of gaussian distribution of X is satisfied and equality of covariance across predictors.
+
+```{r}
+library(MASS)
+lda.fit <- lda(Direction ~ Lag1 + Lag2, data = Smarket,subset = train)
+lda.fit
+```
+
+## Plot of LDA model {.smaller}
+What's been plotted? 
+coef of Lag1 * Lag 1 + coef of Lag2 * lag2
+What does this mean?
+
+```{r,echo=T}
+plot(lda.fit)
+```
+
+## Reproduce plot(lda.fit) {.smaller}
+
+
+```{r, echo=T}
+test <- coef(lda.fit)[1] %*% Smarket[train,"Lag1"] + 
+        coef(lda.fit)[2] %*% Smarket[train,"Lag2"]
+Direc <- Smarket[train,"Direction"]
+par(mfrow = c(1,2))
+hist(test[Direc=="Up"],freq = F)
+hist(test[Direc=="Down"], freq = F)
+```
+

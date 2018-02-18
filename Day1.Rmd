@@ -1,0 +1,65 @@
+---
+title: "Applied Modeling"
+author: "Sri Seshadri"
+date: "1/31/2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Session 1
+
+Using ames data set
+
+```{r}
+library(AmesHousing)
+ames <- make_ames()
+skimr::skim(ames) # gets summary of the entire data
+```
+```{r}
+beanplot::beanplot(Sale_Price~Year_Sold,ames)
+library(ggplot2)
+ggplot(data = ames) + geom_point(mapping = aes(x = Gr_Liv_Area, y = Sale_Price))
+numeric.cols <- sapply(ames,is.numeric)
+cat.cols <- colnames(-numeric.cols)
+
+
+```
+
+Better way of selecting numeric parameters
+
+```{r}
+numeric.predictors <- ames %>% dplyr::select(-Sale_Price) %>% dplyr::select_if(is.numeric) %>% names
+```
+Better way of selecting non-numeric parameters
+
+```{r}
+non.numeric.predictors <- ames %>% dplyr::select(-Sale_Price) %>% dplyr::select_if(is.factor) %>% names
+```
+
+## Validation Vs Test set
+Validation usage:
+1. Use when there is a lot of data
+2. 
+
+# Mechanics of splitting
+
+*https://topepo.github.io/rsample/* -> get familiar with the package.
+
+```{r}
+set.seed(4595)
+library(rsample)
+data_split <- initial_split(ames, strata = "Sale_Price")
+ames_train <- training(data_split)
+ames_test  <- testing(data_split)
+nrow(ames_train)/nrow(ames)
+
+```
+
+
+```{r}
+
+```
+
