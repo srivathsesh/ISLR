@@ -1,0 +1,268 @@
+---
+title: "Lab7"
+author: "Sri Seshadri"
+date: "3/4/2018"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(AppliedPredictiveModeling)
+library(caret)
+library(ISLR)
+library(tree)
+library(partykit)
+```
+
+# 8.3 Lab: Decision Trees Page - 323
+
+## 8.3.1 Fitting classification Trees
+
+### We'll use Carseats data set. An additional variable "High" is created as a logical vector. High being "Yes", when sales is  > 8.
+
+```{r}
+data("Carseats")
+#skimr::skim(Carseats)
+hist(Carseats$Sales,xlab = "Sales", main = "Sales", col = c("#00FFFF"))
+abline(v=8,col= "red", lty = 2, lwd = 2)
+
+Carseats <- Carseats %>% dplyr::mutate(High = as.factor(if_else(Sales <= 8, "No", "Yes")))
+```
+
+page 324:
+
+### We'll use a tree() to fit a classiifcation tree to predict if the "High" variable is "Yes" or "No"
+
+```{r}
+set.seed(10)
+tree.carseats <- tree(High ~ . , data = Carseats[,-1])
+plot(tree.carseats)
+text(tree.carseats,pretty=0,cex = .6)
+summary(tree.carseats)
+```
+
+# What does rpart do?
+
+### Why is there a difference between misclassification between rpart and tree? Also notice the number of terminal nodes (of course the rpart's terminal node collapes the Yes and No into a stacked bar... but still look at the difference)
+
+```{r}
+set.seed(10)
+rpartTree <- rpart::rpart(High ~ . , data = Carseats[,-1],minsplit = 5, minbucket = 10)
+plot(partykit::as.party(rpartTree),gp = gpar(fontsize = 6))
+#summary(rpartTree)
+rpartTreePred <- predict(rpartTree,newdata = Carseats[,-1]) # Could have use type = "class"
+rpartTreePred <- as.factor(if_else(rpartTreePred[,2] > 0.5,"Yes","No"))
+caret::confusionMatrix(rpartTreePred,Carseats$High, positive = "Yes")
+```
+
+## Let's predict outcome of tree() with predict()
+
+### The misclassifications are different between tree() and rpart(). What makes the difference? 
+ - The seed is set as the same!
+ - Splitting criteria ? - Gini Vs misclassification Vs Entropy/deviance?
+ - Stopping criteria for growth?
+
+```{r}
+tree.carseats.Pred <- predict(tree.carseats,newdata = Carseats[,-1]) # Could have used type = "class"
+tree.carseats.Pred <- as.factor(if_else(tree.carseats.Pred[,2] > 0.5,"Yes","No"))
+caret::confusionMatrix(tree.carseats.Pred,Carseats$High, positive = "Yes")
+```
+
+# Page 326
+
+```{r}
+set.seed(2)
+train <- sample(1:nrow(Carseats),200)
+Carseats.Test <- Carseats[-train,]
+High.test <- Carseats$High[-train]
+tree.carseats <- tree(High~.-Sales,Carseats,subset = train)
+tree.pred <- predict(tree.carseats,Carseats.Test,type = "class")
+caret::confusionMatrix(tree.pred,High.test,positive = "Yes")
+
+```
+
+## Pruning tree 
+
+What is the right cost complexity parameter? We'll do cross validation to find that!
+
+```{r}
+set.seed(3)
+cv.carseats = cv.tree(tree.carseats,FUN = prune.misclass)
+names(cv.carseats)
+cv.carseats
+par(mfrow = c(1,2))
+plot(cv.carseats$size,cv.carseats$dev, type = "b")
+plot(cv.carseats$k,cv.carseats$dev, type = "b")
+```
+Page 327
+
+# Fit a tree with the best size viz. 9
+
+```{r}
+prune.carseats <- prune.misclass(tree.carseats,best = 9)
+plot(prune.carseats,cex=0.4)
+text(prune.carseats,pretty = 0)
+summary(prune.carseats)
+```
+
+## How does the pruned tree perform on the test?
+
+```{r}
+tree.pred <- predict(prune.carseats,newdata = Carseats.Test,type = "class")
+caret::confusionMatrix(tree.pred,High.test,positive = "Yes")
+```
+
+## What about a deeper pruned tree? Like 15?
+
+```{r}
+prune.carseats <- prune.misclass(tree.carseats,best = 13)
+plot(prune.carseats)
+text(prune.carseats,pretty = 0,cex = 0.6, main = "Depth = 15")
+tree.pred <- predict(prune.carseats,newdata = Carseats.Test,type = "class")
+caret::confusionMatrix(tree.pred,High.test,positive = "Yes")
+```
+
+# Fitting regression trees (Page 327 -328)
+
+We'll be using the boston data set.
+
+```{r}
+library(MASS)
+set.seed(1)
+train = sample(1:nrow(Boston),nrow(Boston)/2)
+tree.boston <- tree(medv ~ . , data = Boston, subset = train)
+summary(tree.boston)
+```
+
+```{r}
+plot(tree.boston)
+text(tree.boston,pretty = 0,cex=0.6)
+```
+
+# What would a pruned tree look like? Lets start with depth selection using CV
+
+```{r}
+cv.boston <- cv.tree(tree.boston)
+plot(cv.boston$dev ~ cv.boston$size,type = "b")
+```
+
+We'll use 5 as a best... Needing to see if I can use caret to draw the error bars
+
+```{r}
+prune.boston <- prune.tree(tree.boston,best = 5)
+plot(prune.boston)
+text(prune.boston,pretty = 0)
+```
+
+```{r}
+yhat = predict(tree.boston,Boston[-train,])
+boston.test <- Boston[-train,"medv"]
+plot(yhat~boston.test)
+abline(0,1)
+mean((yhat-boston.test)^2)
+```
+
+# 8.3.3. Bagging and Random Forest
+
+Page 329
+
+We'll start with bagging. Both bagging and random forest use the randomForest package. We supply the mtry argument tp be equal to # predictors for bagging.
+
+```{r}
+library(randomForest)
+set.seed(1)
+bag.boston <- randomForest(medv ~ ., data = Boston, subset = train, mtry = 13, importance = T)
+bag.boston
+```
+
+# what is the MSE like for the bagged tree?
+
+```{r}
+yhat.bag <- predict(bag.boston,Boston[-train,])
+plot(yhat.bag~boston.test)
+abline(0,1)
+mean((yhat.bag-boston.test)^2)
+```
+
+## What if we reduced the number of trees fitted to only 25?
+
+```{r}
+bag.boston <- randomForest(medv ~ ., data = Boston, subset = train, mtry = 13, importance = T,ntree = 25)
+yhat.bag <- predict(bag.boston,Boston[-train,])
+plot(yhat.bag~boston.test)
+abline(0,1)
+mean((yhat.bag-boston.test)^2)
+```
+
+```{r}
+bag.boston <- randomForest(medv ~ ., data = Boston, subset = train, importance = T,ntree = 25)
+yhat.bag <- predict(bag.boston,Boston[-train,])
+plot(yhat.bag~boston.test)
+abline(0,1)
+mean((yhat.bag-boston.test)^2)
+```
+
+
+# Random Forest.
+
+```{r}
+set.seed(1)
+rf.boston <- randomForest(medv ~ ., data = Boston, subset = train,mtry = 6, importance = T)
+yhat.rf <- predict(rf.boston,Boston[-train,])
+plot(yhat.rf~boston.test)
+abline(0,1)
+mean((yhat.rf-boston.test)^2)
+```
+
+```{r}
+set.seed(1)
+rf.boston <- randomForest(medv ~ ., data = Boston, subset = train, importance = T)
+rf.boston
+yhat.rf <- predict(rf.boston,Boston[-train,])
+plot(yhat.rf~boston.test)
+abline(0,1)
+mean((yhat.rf-boston.test)^2)
+```
+
+# variable importance
+
+```{r}
+importance(rf.boston)
+varImpPlot(rf.boston)
+```
+
+# 8.3.4 Boosting Page 330 - 331
+
+We'll use Boston data again... we'll set the # trees to 5000, depth = 4 and learning rate at default of 0.001
+
+```{r}
+library(gbm)
+set.seed(1)
+boost.boston <- gbm(medv ~ ., data = Boston[train,], distribution = "gaussian", n.trees = 5000,interaction.depth = 4,shrinkage = 0.01)
+summary(boost.boston)
+
+par(mfrow = c(1,3))
+plot(boost.boston, i = "rm")
+plot(boost.boston,i = "lstat")
+plot(boost.boston,i = "dis")
+```
+
+```{r}
+set.seed(1)
+yhat.boost <- predict(boost.boston,newdata = Boston[-train,],n.trees = 5000)
+plot(yhat.boost~boston.test)
+abline(0,1)
+mean((yhat.boost - boston.test)^2)
+```
+
+```{r}
+boost.boston <- gbm(medv ~ ., data = Boston[train,], distribution = "gaussian", n.trees = 5000,interaction.depth = 4, shrinkage = 0.2)
+yhat.boost <- predict(boost.boston,newdata = Boston[-train,],n.trees = 5000)
+plot(yhat.boost~boston.test)
+abline(0,1)
+mean((yhat.boost - boston.test)^2)
+```
+

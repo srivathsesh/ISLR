@@ -1,0 +1,297 @@
+---
+title: "Lab8"
+author: "Sri Seshadri"
+date: "3/10/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(e1071)
+library(LiblineaR)
+
+```
+
+# 9.6.1 Support vector Classifier page 359
+
+The svm() uses a different formulation other than the equations in 9.14 and 9.15, when kernel argument is set to linear. The svm() function uses a cost argument. When the cost is high the margin is narrow and very few points would be in the margin or violate the margin. When the cost is low, the margin is wider and there would be more points in the margin or violate the margin. 
+
+
+## Data generation
+
+```{r}
+set.seed(1)
+x = matrix(rnorm(20*2), ncol = 2)
+y = c(rep(-1,10),rep(1,10))
+x[y==1,] = x[y==1,] + 1
+
+plot(x,col=(3-y))
+```
+
+```{r}
+dat = data.frame(x = x, y = as.factor(y))
+library(e1071)
+# scale is set to F, there are cases where we want the scale to be T
+svmfit = svm(y~., data = dat, kernel = "linear", cost = 10, scale = F)
+plot(svmfit,dat)
+summary(svmfit)
+```
+Here the support vectors are marked with asterix. There are 7 support vectors. They can be queried as follows
+
+```{r}
+svmfit$index
+
+```
+
+What if we used a smaller value for the cost ?
+
+```{r}
+svmfit.lowcost = svm(y ~ ., data = dat, cost = 0.1, kernel = "linear")
+plot(svmfit.lowcost,dat)
+svmfit.lowcost$index
+summary(svmfit.lowcost)
+```
+
+## Page 361
+
+The svm() foes not output the function of the hyperplane nor does it report the width of the margin. The tune() in e1071 performs a 10 fold cross validation on a set of model under consideration.
+
+```{r}
+set.seed(1)
+tune.out = tune(svm,y~., data = dat,kernel = "linear", ranges = list(cost = c(0.001,0.01,0.1,1,5,10,100)))
+summary(tune.out)
+```
+
+The best model is when cost is 0.1. The best model can be retrieved by ...
+
+```{r}
+tune.out$best.model
+# tune.out$best.performance
+# tune.out$best.parameters
+```
+
+## Using the best model to predict test cases... Here is how we retrive the best model.
+
+```{r}
+bestmod = tune.out$best.model
+summary(bestmod)
+```
+# Build test samples for testing best model from above. Page (361-362)
+
+```{r}
+#set.seed(1)
+xtest = matrix(rnorm(20*2), ncol = 2)
+ytest = sample(c(-1,1),20,rep = T)
+xtest[ytest==1,] = xtest[ytest==1,] + 1
+testdat = data.frame(x=xtest, y = as.factor(ytest))
+
+plot(xtest,col = 3 - ytest)
+```
+
+## Prediciton using the best model from above
+
+```{r}
+ypred = predict(bestmod,testdat)
+table(predict = ypred,truth = testdat$y)
+caret::confusionMatrix(ypred,testdat$y)
+```
+
+## trying a different cost metric
+
+```{r}
+svmfit.2 <- svm(y~. , data = dat, kernel = "linear", cost = .01, scale = F)
+ypred.2 <- predict(svmfit.2, testdat)
+caret::confusionMatrix(ypred.2,testdat$y)
+```
+# Quiz # 2 
+
+```{r}
+svmfit.q2 <- svm(y~.,data = dat, kernel = "linear", cost = 1, scale = F)
+ypred.q2 <- predict(svmfit.q2, testdat)
+caret::confusionMatrix(ypred.q2,testdat$y)
+```
+
+
+# Situation where the samples are barely linearly separable
+
+```{r}
+x2 = x
+y2 = y
+x2[y2==1,] = x2[y2==1,] + 0.5
+plot(x2,col=(y2+5)/2,pch = 19)
+dat2 = data.frame(x = x2, y=as.factor(y2))
+
+```
+
+```{r}
+svmfit.3 <- svm(y~.,data = dat2, kernel = "linear", cost = 1e5)
+summary(svmfit.3)
+plot(svmfit.3,dat2)
+caret::confusionMatrix(predict(svmfit.3,dat2),dat2$y)
+```
+
+Notice that there are few support vectors (x points). Its because the cost variable is high. I am curious how this model would perform on the test data... The guess is the data might have been over fit
+
+# Generate test data for the above data set... 
+
+```{r}
+set.seed(1)
+xtest.2 = matrix(rnorm(20*2), ncol = 2)
+ytest.2 = sample(c(-1,1),20,rep = T)
+xtest.2[ytest.2==1,] = xtest[ytest.2==1,] + 0.5
+testdat.2 = data.frame(x=xtest.2, y = as.factor(ytest.2))
+
+plot(xtest.2,col = (ytest.2+5)/2,pch = 19)
+```
+
+```{r}
+ypred.3 <- predict(svmfit.3,testdat.2)
+caret::confusionMatrix(ypred.3,testdat.2$y)
+plot(svmfit.3,testdat.2)
+```
+
+## How about using a cost of 1? 
+
+Does it perform better than the previous model on the test data
+
+```{r}
+svmfit.4 <- svm(y~.,data = dat2, kernel = "linear", cost = 1)
+summary(svmfit.4)
+plot(svmfit.4,dat2)
+caret::confusionMatrix(predict(svmfit.4,dat2),dat2$y)
+```
+```{r}
+ypred.4 <- predict(svmfit.4,testdat.2)
+caret::confusionMatrix(ypred.4,testdat.2$y)
+plot(svmfit.4,testdat.2)
+```
+
+# 9.6.2 Support Vectoe Machines
+
+We use the same function as before - svm(), but would use kernel = 'polyinomial' along with degree argument. For radial kernel, we use kernel = 'radial' with specification for gamma
+
+Lets generate some data with non linear class boundary
+
+```{r}
+set.seed(1)
+x.3 = matrix(rnorm(200*2), ncol = 2)
+x.3[1:100,] = x.3[1:100,] + 2
+x.3[101:150,] = x.3[101:150,] - 2
+y.3 = c(rep(1,150), rep(2,50))
+dat3 = data.frame(x = x.3, y = as.factor(y.3))
+
+plot(x.3,col = y.3)
+```
+
+## Split the data into training and test samples
+
+```{r}
+train = sample(200,100)
+svm.mach <- svm(y~., data = dat3[train,], kernel = 'radial', cost = 1, gamma = 1)
+plot(svm.mach, dat3[train,])
+summary(svm.mach)
+```
+What if we increased the cost
+
+```{r}
+svm.mach.1 <- svm(y~., data = dat3[train,], kernel = 'radial', cost = 1e5, gamma = 1)
+plot(svm.mach.1, dat3[train,])
+```
+
+```{r}
+set.seed(1)
+tune.out.1 <- tune(svm,y~.,data = dat3[train,],kernel = "radial", ranges = list(cost = c(0.1,1,10,100,1000),gamma = c(0.5,1,2,3,4)))
+summary(tune.out.1)
+```
+
+```{r}
+ypred.5 <- predict(tune.out.1$best.model, newdata = dat3[-train,])
+caret::confusionMatrix(ypred.5,dat3$y[-train])
+```
+
+# ROC Curves
+
+We'll use both pROC and ROCR packages in the this lab. In order to plot the ROCs we need the fitted values of the SVM and not the class labels. As it was done in logsitic regression where the probabilities were used for ROC and not the class label.
+
+How do we get the fitted values from the SVM model? We set the argument "decision.values = TRUE". Let's try that.
+
+```{r}
+library(pROC)
+svm.mach.opt <- svm(y~., data = dat3[train,], kernel = 'radial', cost = 1, gamma = 2,decision.values = T)
+fittedVals <- attributes(predict(svm.mach.opt,dat3[train,], decision.values = T))$decision.values
+roc.curve.train <- pROC::roc(response = dat3[train,'y'], predictor = fittedVals)
+plot(roc.curve.train,asp = NA, legacy.axes = T,xlab = "FPR", ylab = "TPR", main = "Training Data")
+
+library(ROCR)
+rocplot <- function(pred,truth,...){
+  predobs <- prediction(pred,truth)
+  perf <- performance(predobs, "tpr", "fpr")
+  plot(perf,...)
+}
+#rocplot(fittedVals,dat3[train,'y'], main = "Training Data")
+
+svmfit.flex <- svm(y~., data = dat3[train,], kernel = 'radial', cost = 1, gamma = 50,decision.values = T)
+fitted.flex <- attributes(predict(svmfit.flex,dat3[train,], decision.values = T))$decision.values
+roc.flex <- pROC::roc(response = dat3[train,'y'], predictor = fitted.flex)
+plot(roc.flex, asp = NA, legacy.axes = T,add = T, col = 'red')
+legend("bottomright", legend = c("gamma =2", "gamma = 50"), col = c("black", "red"), lty = c(1,1),cex = 0.5)
+```
+
+### Ok great, what would be the performance on the test set?
+
+```{r}
+fittedVals.test <- attributes(predict(svm.mach.opt,dat3[-train,], decision.values = T))$decision.values
+fitted.flex.test <- attributes(predict(svmfit.flex,dat3[-train,], decision.values = T))$decision.values
+roc.curve.test <- pROC::roc(response = dat3[-train,'y'], predictor = fittedVals.test)
+plot(roc.curve.test,asp = NA, legacy.axes = T,xlab = "FPR", ylab = "TPR", main = "Test Data")
+roc.flex.test <- pROC::roc(response = dat3[-train,'y'], predictor = fitted.flex.test)
+plot(roc.flex.test, asp = NA, legacy.axes = T,add = T, col = 'red')
+legend("bottomright", legend = c("gamma =2", "gamma = 50"), col = c("black", "red"), lty = c(1,1),cex = 0.5)
+```
+
+# 9.6.4 SVM Multiclass problem
+
+Lets create another class and it to the data that we have already created
+
+```{r}
+set.seed(1)
+x.4 <- rbind(x.3,matrix(rnorm(50*2),ncol = 2))
+y.4 <- c(y.3,rep(0,50))
+x.4[y.4==0,] = x.4[y.4==0,] + 2
+dat4 <- data.frame(x = x.4,y = as.factor(y.4))
+plot(x.4,col = (y.4 + 1))
+```
+
+```{r}
+svmfit.multiclass <- svm(y~., data = dat4, kernel = "radial", cost = 10, gamma = 1)
+plot(svmfit.multiclass,dat4)
+abline(h=0,lty=4)
+abline(v=-1.3,lty = 4)
+```
+
+# 9.6.5 Application to the Gene Expression Data
+
+```{r}
+library(ISLR)
+names(Khan)
+dim(Khan$xtrain)
+hmm <- Khan$xtrain
+table(Khan$ytrain)
+table(Khan$ytest)
+```
+
+```{r}
+dat5 <- data.frame(x = Khan$xtrain, y = as.factor(Khan$ytrain))
+out <- svm(y~., data = dat5, kernel = "linear",cost = 10)
+summary(out)
+caret::confusionMatrix(out$fitted,dat5$y)
+```
+
+### Super, now whats the performance on the ytest
+
+```{r}
+dat.te = data.frame(x = Khan$xtest, y = as.factor(Khan$ytest))
+pred.te = predict(out,newdata = dat.te)
+table(pred.te,dat.te$y)
+```
+

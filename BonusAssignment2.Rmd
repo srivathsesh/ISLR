@@ -1,0 +1,154 @@
+---
+title: "BonusAssignment2_Seshadri"
+author: "Sri Seshadri"
+date: "3/11/2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE, warning=FALSE, message=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(caret)
+library(rsample)
+library(ggplot2)
+library(dplyr)
+```
+
+# Objective:
+
+Study the effect on coefficients of a model due to repeated resampling of training and validation samples.
+
+# Executive Summary
+
+The coefficients of a model trained on, one time sampling of training data, is biased. Its is necessary to train and test the model in multiple cross validated samples to get an unbiased estimate of the coefficients.
+
+# Analysis
+
+## Explore and Set up the data set
+
+The structure of GermanCredit data set is explored below. It looks like there are several binary variables that are of the type numeric. The binary variables are converted into factors. Also there are couple of features that have only one unique value, those featuers are removed from the data for modeling. It'll also be useful to scale and center the data for easier plotting of multiple coefficients in the same plot
+
+```{r}
+data("GermanCredit")
+skimr::skim(GermanCredit)
+
+integerVars <- GermanCredit  %>% dplyr::select_if(is.integer) %>% names
+Vars <- colnames(GermanCredit)
+tobeConvertedVars <- Vars[!Vars %in% integerVars]
+
+GermanCredit[tobeConvertedVars] <- lapply(GermanCredit[tobeConvertedVars], factor)
+UniqueVars <- Vars[caret::nearZeroVar(GermanCredit,uniqueCut = 0)]
+Vars2select <- Vars[!Vars %in% UniqueVars]
+GermanCredit <- GermanCredit %>% dplyr::select(!!Vars2select)
+
+trans <- caret::preProcess(GermanCredit,center = T, scale = T)
+GermanCredit <- predict(trans, GermanCredit)
+```
+
+The GermanCredit data in caret package is split into training and test in the ratio 63.2:36.8 repeatedly for 1000 times. The rsample package is used to split the data iteratively.
+
+The the number of rows of data for each split is verified in figure 1.
+
+```{r, warning=F, message=F, fig.cap="Verify split"}
+set.seed(1)
+# Data sampled without replacement
+
+samples <- rsample::mc_cv(data = GermanCredit,prop = 0.632,times = 1000)
+
+# Verify the dimensions of the first of the 1000 splits
+
+SampleVerification <- purrr::map_df(1:1000,.f = function(x) data.frame(ResampleId = x,TrainRows = nrow(analysis(samples$splits[[x]])), TestRows = nrow(assessment(samples$splits[[x]]))) )
+
+lattice::xyplot(TrainRows + TestRows ~ ResampleId,data = SampleVerification,ylab = "Rows of data",auto.key=list(space="bottom", columns=4, cex.title=1,lines=TRUE, points=FALSE, box = T))
+
+```
+
+
+## Linear model fits and evaluation.
+
+Linear model is fit on the training sets and the model is evaluated on the test sets for each of the 1000 train-test samples. Those variables that have only one unique value are removed as predictors.
+
+```{r, warning=F,message=F}
+# Function to get model stats
+ModelSummaries <- function(split){
+  # get the train and test sets from the split
+  Train <- rsample::analysis(split$splits[[1]])
+  Test <- rsample::assessment(split$splits[[1]])
+  Vars <- colnames(Train)
+  # get variables that have only one unique value and remove them
+  UniqueVars <- caret::nearZeroVar(Train,uniqueCut = 0)
+  if(length(UniqueVars) > 0){
+    Train <- Train[,UniqueVars*-1]
+    Test <- Test[,UniqueVars*-1]
+  }
+  
+  
+  # linear model fit
+  lm.fit <- lm(Amount ~ ., data = Train)
+  coefs <- coefficients(lm.fit)
+  AdjR2.Train <- summary(lm.fit)$adj.r.squared
+  yPred <- predict(lm.fit,newdata = Test)
+  R2.test <- cor(yPred,Test$Amount)^2
+  return(list(Betas = coefs,Train.R2 = AdjR2.Train, Test.R2 = R2.test))
+}
+
+ModelStats <- purrr::map(1:1000,function(x) ModelSummaries(samples[x,]))
+
+# Check if named vectors of Beta coefficients are the same for all the 1000 splits
+lengthVer <- sapply(1:1000,function(x) names(ModelStats[[x]]$Betas))
+test2 <- sapply(1:60, function(x) {length(unique(lengthVer[x,]))})
+#plot(test2)
+
+# Retrieve Beta coefficents as dataframe
+
+df.coef <- sapply(1:1000, function(x){ModelStats[[x]]$Betas})
+df.coef <- t(df.coef)
+
+Rsquared <- data.frame(Train = train <- sapply(1:1000, function(x){ModelStats[[x]]$Train.R2}),
+                       Test = sapply(1:1000, function(x){ModelStats[[x]]$Test.R2}))
+
+Rsquared <- Rsquared %>% mutate(PercFall = (Train - Test)/Train)
+```
+
+Figure 2 shows the scaled coefficients of the predictors.
+
+```{r, fig.cap="Scaled Coefficients plot",fig.height=5}
+df.coef <- data.frame(df.coef)
+df.coef.plotdf <- tidyr::gather(df.coef)
+ggplot(data = df.coef.plotdf, mapping = aes(x=value)) + geom_histogram() + facet_wrap(~key, scales = 'free_x')
+
+```
+
+Figure 3 shows the distribution of R-Squared of Training and Test data and as well the % fall in R-Squared from training to test. 
+
+It can be seen that the % Fall in R Squared is within a range of -20% to 30%. 
+
+```{r}
+par(mfrow=c(1,3))
+hist(Rsquared$Train,xlab = "RSquared Training", main="")
+hist(Rsquared$Test,xlab = "RSquared Test", main="")
+hist(Rsquared$PercFall, xlab = "% Fall in RSquared from Train to Test", main="")
+```
+
+
+```{r}
+library(Rmisc)
+Stats <- data.frame(t(sapply(1:60, function(x){CI(df.coef[,x])}))) %>% dplyr::mutate(Predictor = colnames(df.coef)) %>% 
+  dplyr::select(Predictor,lower,mean,upper)
+
+trainSamples <- sample(1000,632)
+#nearZeroVar(GermanCredit[train,],uniqueCut = 0)
+lmfit.once <- lm(Amount ~ ., data = GermanCredit[trainSamples,])
+coefs.omce <- coef(lmfit.once)
+Stats <- Stats %>% dplyr::mutate(OneTimeSplitCoef = coefs.omce, WithinCI = if_else(coefs.omce >= lower & coefs.omce <= upper,"Within","Outside"))
+
+knitr::kable(Stats, caption = "Comparison of single coefficient to averge of 1000 fits")
+table(Stats$WithinCI)
+```
+
+# Conclusion
+
+It is seen that 47 of 49 coeffiicents of the one time split model are outside of the confidence interval. This is due to the 1000 samples of each coefficients making the confidence intterval tight. The one time sample coefficient is a biased estimate, whereas the avergae of 1000 samples of each coefficent is unbiased.
+
+
+
+

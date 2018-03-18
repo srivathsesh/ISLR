@@ -1,0 +1,609 @@
+---
+title: "PREDICT 422 Course Project"
+author: "Sri Seshadri"
+date: "3/13/2018"
+output: 
+  pdf_document:
+    toc: true
+    toc_depth: 3
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = F, message = F)
+library(dplyr)
+library(ggplot2)
+library(caret)
+library(partykit)
+library(MASS)
+```
+
+\pagebreak
+
+# 1. Introduction
+
+A charitable organization is wanting to maximize the donations as a result of their direct mailing campaign. Historically they have had 10% response rate for their mailing campaigns, with an average of `$14.50` collected as donation. However it costs `$2.00` to produce and send out a mail. This results in an expected donation of 14.50 x 10% - 2 = -$0.55. The charitable organization is wanting to use to build predicitive models on the data that was collected recently. We will be helping the organization with building predictive models to classify who are the likely donors. Also we will model the likely donations from the predicted donors.
+
+# 2. About the data
+
+A weighted sampling method over representing the donors  such that an equal of number non-donors and donors are represented was used. The data is split into two groups a) Training set; to train predictive models b) Validation set - to validate the predictive models. The model that maximizes the profit is used as the criteria for model selection for predicting potential donors. Another model is trained on to predict donation amount from the donors. The mean prediction error (MAE/MSE) is used as a criteria for model selection. The nomencalture of the features in the data are provided in Apendix A.
+
+Below is the breakdown of the samples as training, validation and test (final prediction made on this set of the data):
+
+
+```{r}
+charity <- read.csv('charity.csv')
+charity <- as_tibble(charity)
+Sampling <- charity %>% group_by(part) %>% summarise(Samples = n())
+knitr::kable(Sampling,caption = "Samples breakdown")
+charity <- charity[,-1]
+
+# split data by the parts
+train <- charity %>% dplyr::filter(part == "train") %>% dplyr::select(-part)
+Validation <- charity %>% dplyr::filter(part == "valid") %>% dplyr::select(-part)
+test <- charity %>% dplyr::filter(part == "test") %>% dplyr::select(-part)
+
+  
+  # Make binary columns as factor variables
+make_factor <- function(df){
+  BinaryCols <- lapply(apply(df,2,unique), length) == 2
+df[,which(BinaryCols == T)] <- lapply(df[,which(BinaryCols == T)], as.factor)
+df
+}
+
+```
+
+# 3. Exploratory Data Analysis (EDA)
+
+Figure 1 shows the correlation matrix ofthe variables. There appears to be association between the number of children in the household and donors. As expected, the median and mean household incomes are positively correlated. The incomes are positively corrleated with home values and negatively correlated with percent categorized as kow income. The lifetime number of promotions received is positively correlated with the life time gifts. Average gifts are correlated with largest and recent gifts as expected. There are weak correlations between donor (donor amount) and all predictors except number of children. 
+
+The below tables show the percent donors by each of the levels in number of children. Number of children looks to be a good predictor among others.
+
+
+```{r,fig.cap="Correlation between variables",fig.height=3}
+correlations <- cor(train)
+corrplot::corrplot(correlations,method = "ellipse")
+```
+
+\pagebreak
+
+
+```{r}
+
+crosstable <- function(var1, var2) {
+  crosstbl <- cbind(table(var1, var2))
+  crosstbl <- cbind(crosstbl,round(crosstbl[,2]/rowSums(crosstbl),3)*100)
+  colnames(crosstbl) <- c("No_Donor", "Yes_Donor", "%")
+  crosstbl
+}
+
+#knitr::kable(crosstable(train$chld, train$donr),caption = "Proportion of donors by Number of children")
+
+#knitr::kable(crosstable(train$wrat, train$donr), caption = "Proportion of donors by wealth rating")
+
+childtbl <- crosstable(train$chld, train$donr)
+wealthRatingtbl <- knitr::kable(crosstable(train$wrat, train$donr))
+incmcattbl <- knitr::kable(crosstable(as.factor(train$hinc),train$donr))
+homeownertbl <- crosstable(train$home,train$donr)
+rownames(homeownertbl) <- c("Not homeowner", "Homeowner")
+homeownertbl <- knitr::kable(homeownertbl)
+
+#knitr::kable(list(childtbl,homeownertbl))
+
+```
+
+
+```{r}
+knitr::kable(crosstable(train$chld, train$donr))
+```
+
+## 3.1 Data Transformation.
+
+The features lifetime gifts to date, largest gift to date, recent gift and average home value are skewed to the right. We'll use log transformation to minimize the effect of extreme values in the model. Further transformation if needed would be made and noted.
+
+```{r, fig.cap="Correlation plot of transformed training data",fig.height=4}
+
+# Prepare a reciepe to transform data 
+
+library(recipes)
+
+# define reciepe steps
+rec <- recipe(donr ~ . -damt, data = train)
+rec  <- rec  %>% 
+        step_log(tgif) %>% 
+        step_log(agif) %>% 
+        step_log(lgif) %>% 
+        step_log(rgif) %>% 
+        step_log(avhv) #%>% 
+        #step_corr(-contains("d"),threshold = 0.75)
+
+reciepe_trained <- prep(rec,data = train, retain = T)
+
+trainTransformed <- bake(object = reciepe_trained, newdata = train)
+
+#trainTransformed <- train %>% dplyr::mutate(logtgif = log(tgif), logagif = log(agif), loglgif = log(lgif), logrgif = log(rgif), logavhv = log(avhv))
+
+#trainTransformed <- trainTransformed %>% dplyr::select(-tgif,-lgif,-agif,-rgif, -avhv)
+correlations <- cor(trainTransformed)
+corrplot::corrplot(correlations,method = "color", addCoef.col="grey", order = "AOE",number.cex=0.5)
+#trainTransformed <- train %>% dplyr::select(-tgif,-lgif,-agif,-rgif, -avhv)
+#colnames(correlations)[caret::findCorrelation(correlations,cutoff = 0.75)]
+
+```
+
+# 4. Feature selection
+
+
+## 4.1 Correlations among predictors
+
+Refering figure 2, it c an be noted that there is over 80% correlation between average income and median income and log home values. Therefore average income is retained and remove home value and median income as predictors. Also the log of largest gift has over 80% correlation with recent gift amount and average gift amount. Hence largest gift is retained as predictors and the average and recent gifts are removed. Similarly the number of promotions received has 87% correlation with log of lifetime gifts to date. The number of promotions is retained as predictor.
+
+The following are the predictors that are retained for model fitting. 
+
+```{r}
+VarstoRemove <- c("avhv","incm","agif","rgif","tgif")
+Response <- c("donr", "damt")
+Predictors <- colnames(trainTransformed)[!colnames(trainTransformed) %in% c(VarstoRemove,Response)]
+knitr::kable(matrix(Predictors,ncol = 3), caption = "List of retained predictors")
+```
+
+# 5. Classification Modeling
+
+In this section, classification models such as classification trees, logistic regression, Linear Discriminant Analysis, Quadratic discriminant analysis and Support Vector Machines are explored. The objective of the classification models is to predict the probability of a recipent of a mailing campaign being a donor. 
+
+## 5.1 Random forest 
+
+In section 3 it was seen that number of children, region 2 and home ownership has some influence on donorship. The predictor space may be able to split in rectangular sections for good predictability. Random forest method is used first to leverage both its predicitve properties and feature selection properties (via the variable importance plot). The insights from variable selection can be used in the modeling process downstream. 150 trees were fit for the random forest as the errors began to stabilize from 100 trees; shown in the left panel of figure 3. The number of predictors used for each tree fit in the forest was 4. 
+
+It is seen from the variable importance plot in figure 3, that categorical variables like number of children, household income, wealth rating, home ownership and region 2 came up to be very important. The classification trees could be biased in choosing categorical variables for split. Other techniques would be explored in the following sections.
+
+```{r, fig.cap="Variable importance plot", fig.height=4}
+set.seed(1)
+library(randomForest)
+# Making the binary columns as factors
+trainTransformed <- make_factor(trainTransformed)
+rfdata <-trainTransformed[,c(Predictors,Response[1])] 
+# rf <- randomForest(donr ~ . -damt, data = trainTransformed[,c(Predictors,Response)],ntree=150)
+rf <- randomForest(donr ~ ., data = rfdata,ntree=150)
+par(mfrow = c(1,2))
+plot(rf, main = "Error Vs # trees")
+varImpPlot(rf,main = "Variable importance")
+```
+
+### 5.1.1 Random forest model assessment.
+
+Figure 4 shows that the random forest fit on the training data is fit perfectly with 100% Area Under the Curve (AUC). There is slight decrease in performance on the validation set; with 96% AUC. The model shows that maximum profit of `$11,791.50` can obtained by mailing 61% of the people. the accuracy of the model is shown below.
+
+```{r,fig.cap="Left: ROC curves of random forest fit comparing the training and validation data. Right: Cumulative profit vs mails sent to potential donors based on Random forest classification "}
+#predictedClassProb <- predict(rf,newdata = trainTransformed[,c(Predictors,Response)],type = "prob")
+predictedClassProb <- predict(rf,newdata = rfdata,type = "prob")
+#predictedClass <- predict(rf,newdata = trainTransformed,type= "response")
+predictedClass <- predict(rf,newdata = rfdata,type= "response")
+#caret::confusionMatrix(predictedClass,trainTransformed$donr, positive = "1")
+rocCurve.train <- pROC::roc(predictor = predictedClassProb[,2],response = trainTransformed$donr)
+auc.rf.train <- round(pROC::auc(rocCurve.train),2)
+#************************
+# set up validation data
+#************************
+ValidTrans <- bake(object = reciepe_trained, newdata = Validation)
+ValidTrans <- make_factor(ValidTrans)
+
+
+predictedClassProb.valid <- predict(rf,newdata = ValidTrans, type = "prob")
+predictedClassProb.valid <- predictedClassProb.valid[,2]
+predictedClass.valid <- predict(rf,newdata = ValidTrans, type = "response")
+rocCurve.valid <- pROC::roc(predictor = predictedClassProb.valid,response = ValidTrans$donr)
+auc.rf.valid <- round(pROC::auc(rocCurve.valid),2)
+
+
+#*********************************************
+#* Profit calculation for random forest model *
+#*********************************************
+
+# ValidTrans has non factor donr, so using Validation
+profitrf <- cumsum(14.5*Validation[order(predictedClassProb.valid, decreasing=T),21]$donr-2) 
+
+#***********************************************
+#         PLOTTING                            
+#***********************************************
+par(mfrow = c(1,2))
+plot(rocCurve.train,legacy.axes = T,asp = NA, col = 'blue')
+plot(rocCurve.valid,legacy.axes = T,asp = NA, col = 'red', add = T)
+legend("bottomright",legend = c(paste0("Train; AUC:",auc.rf.train), paste0("validation; AUC:",auc.rf.valid)), col = c("blue", "red"), lty = 1,cex = 0.6)
+plot(profitrf, xlab = "# Mails", ylab = "Profit")
+
+```
+
+```{r,fig.cap="Lift chart of random forest model on validation data"}
+
+plot(lift(ValidTrans$donr~predictedClassProb.valid, class = "1"))
+
+n.mail.valid <- which.max(profitrf)
+Profitability <- data.frame(Mails = n.mail.valid, Profit = max(profitrf), Model = "RandomForest")
+knitr::kable(Profitability, caption = "Mails for campaign & profitability")
+
+
+cutoff.rf <- sort(predictedClassProb.valid, decreasing=T)[n.mail.valid+1] # set cutoff based on n.mail.valid
+chat.valid.rf <- ifelse(predictedClassProb.valid>cutoff.rf, 1, 0) # mail to everyone above the cutoff
+cm.rf <- caret::confusionMatrix(chat.valid.rf, Validation$donr,positive = "1") # classification table
+cm.rf$table
+
+#cm.rf$byClass
+```
+
+\pagebreak
+
+## 5.2 Logistic Regression
+
+In this section, two logistic regression models are attempted. 
+  - A full model, using all features that were deemed useful after removing correlated variables. 
+  - A reduced model using the features that were important in the variable importance plot.
+  
+In the first logistic model, the residuals when plotted against house hold income category had a curve. The model statistics are not shown for brevity of this report. So quadratic term in "hinc" feature was attempted.
+
+It can be seen that the validation ROC tracks the training ROC. The models does not provide a huge improvement over the random forest.
+
+```{r}
+
+#*****************************************
+#         Logitic regression fit  - 1          
+#*****************************************
+logisticFit <- glm(donr ~ . -damt, data = trainTransformed[,c(Predictors,Response)], family = binomial)
+#summary(logisticFit)
+
+
+#*****************************************
+#       Function to spit out profitability
+#*****************************************
+ProfitabilityMatrix <- function(donr,PredictedProbs,Model,Plot =T){
+  profits <- cumsum(14.5*donr[order(PredictedProbs,decreasing = T)] - 2)
+  Mails <- which.max(profits)
+  Maxprofit <- max(profits)
+  outdf <- data.frame(Mails = Mails, Profit = Maxprofit, Model = Model)
+  cutoff <- sort(PredictedProbs,decreasing = T)[Mails + 1]
+  MailOrNot <- ifelse(PredictedProbs > cutoff, 1,0)
+  ConfusionMatrix <- caret::confusionMatrix(MailOrNot,donr,positive = "1")
+  if(Plot == T){
+    plot(profits,xlab = "# Mails", ylab = "Profit")
+    library(grid)
+    p <- recordPlot()
+  } else p <- NULL
+  return(list(outdf = outdf,ConfusionMatrix = ConfusionMatrix, p = p))
+}
+```
+
+```{r,fig.cap="Left: ROC Curve of logistic regression Right: Profitability curve vs number of mails"}
+
+#******************************************
+# Logistic predictions
+#******************************************
+logistic.Pred.Train <- predict(logisticFit,type = "response")
+roc.lostic.train <- pROC::roc(response = trainTransformed$donr, predictor = logistic.Pred.Train)
+auc.logistic.train <- round(pROC::auc(roc.lostic.train),2)
+logistic.Pred.Valid <- predict(logisticFit,newdata = ValidTrans,type = "response")
+roc.lostic.valid <- pROC::roc(response = ValidTrans$donr, predictor = logistic.Pred.Valid)
+auc.logistic.valid <- round(pROC::auc(roc.lostic.valid),2)
+
+#******************************************
+#   Plotting
+#******************************************
+par(mfrow = c(1,2))
+plot(roc.lostic.train,legacy.axes = T,asp = NA, col = 'blue')
+plot(roc.lostic.valid,legacy.axes = T,asp = NA, col = 'red', add = T)
+legend("bottomright",legend = c(paste0("Train; AUC:",auc.logistic.train), paste0("validation; AUC:",auc.logistic.valid)), col = c("blue", "red"), lty = 1,cex = 0.6)
+Results.Logistic <- ProfitabilityMatrix(Validation$donr,logistic.Pred.Valid,"Logistic")
+mtext("Logistic Regression - Full model", side = 1, line = -22, outer = TRUE)
+```
+
+```{r,fig.cap="Left: Residual plot of logistic regression vs household income category Right: Lift chart of logistic regression"}
+modeldf <- broom::augment(logisticFit)
+#par(mfrow = c(1,2))
+library(ggplot2)
+residp <-ggplot(data = modeldf, mapping = aes(x = hinc, y = .resid)) + geom_point() + stat_summary(fun.y=mean, colour="blue", geom="line", size = 1) + theme_bw()
+lp <- plot(lift(ValidTrans$donr~logistic.Pred.Valid, class = "1"))
+gridExtra::grid.arrange(residp,lp,ncol = 2)
+
+Profitability <- rbind(Profitability,Results.Logistic$outdf)
+knitr::kable(Profitability, caption = "Mails for campaign & profitability")
+
+Results.Logistic$ConfusionMatrix$table
+
+```
+
+
+
+```{r, fig.cap="Logistic regression with selected predictors", fig.height=3}
+# Logistic regression 2
+logisticFit2 <- glm(donr ~ chld + wrat + I(hinc^2) + I(hinc) + npro + tdon + home + reg2 + inca -damt, data = trainTransformed[,c(Predictors,Response)], family = binomial)
+
+#summary(logisticFit2)
+
+
+#******************************************
+# Logistic predictions
+#******************************************
+logistic2.Pred.Train <- predict(logisticFit2,type = "response")
+roc.lostic2.train <- pROC::roc(response = trainTransformed$donr, predictor = logistic2.Pred.Train)
+auc.logistic2.train <- round(pROC::auc(roc.lostic2.train),2)
+logistic2.Pred.Valid <- predict(logisticFit2,newdata = ValidTrans,type = "response")
+roc.lostic2.valid <- pROC::roc(response = ValidTrans$donr, predictor = logistic2.Pred.Valid)
+auc.logistic2.valid <- round(pROC::auc(roc.lostic2.valid),2)
+
+#******************************************
+#   Plotting
+#******************************************
+par(mfrow = c(1,2))
+plot(roc.lostic2.train,legacy.axes = T,asp = NA, col = 'blue')
+plot(roc.lostic2.valid,legacy.axes = T,asp = NA, col = 'red', add = T)
+legend("bottomright",legend = c(paste0("Train; AUC:",auc.logistic2.train), paste0("validation; AUC:",auc.logistic2.valid)), col = c("blue", "red"), lty = 1,cex = 0.6)
+Results.Logistic2 <- ProfitabilityMatrix(Validation$donr,logistic2.Pred.Valid,"Logistic2")
+mtext("Logistic Regression - selected predictors model", side = 1, line = -22, outer = TRUE)
+```
+
+```{r,fig.cap="Lift chart for logistic regression with selected predictors", fig.height=3}
+
+plot(lift(ValidTrans$donr~logistic2.Pred.Valid, class = "1"))
+Profitability <- rbind(Profitability,Results.Logistic2$outdf)
+knitr::kable(Profitability, caption = "Mails for campaign & profitability")
+
+Results.Logistic2$ConfusionMatrix$table
+```
+## 5.3 Discriminant Analysis
+
+In this section three models were fit.
+
+    1. Linear discriminant analysis
+    2. Quadratic discriminat analysis.
+    3. Partial least squares discriminant analysis.
+    
+### 5.3.1 Linear Discriminat Analysis (LDA)
+
+We use the observation in the logistic regression model here to enhance the model. The hinc variable is squared to account for the curve in the residuals. Refer figure. Also we use all the predictors as a full model. 
+
+The training and test ROC curves track each other. The LDA seems to be the next best to Random forest. The confusion matrix shows that we have high sensitivity but at the same time have 40% false pass rate. 
+
+```{r}
+
+#******************************************************
+#       Build Reciepe for LDA & PLSDA
+#******************************************************
+rec_scale_center <- recipe(donr ~ . -damt, data = train)
+rec_scale_center <- rec_scale_center %>% 
+                        step_center(has_role()) %>% 
+                        step_scale(has_role())
+
+reciepe2_trained <- prep(rec,data = train, retain = T)
+trainCenterScaled <- bake(object = reciepe2_trained, newdata = train)
+
+validCenterScaled <- bake(object = reciepe2_trained,newdata = Validation)
+```
+
+```{r, fig.cap = "Left: ROC curve of LDA. Right: Profitability chart when LDA is used for prediction", fig.height=3}
+#*******************************************************
+# Linear discriminant analysis
+#*******************************************************
+lda.fit <- lda(donr ~ . + I(hinc^2)-damt,
+data = trainCenterScaled)
+#plot(lda.fit)
+# lda.fit <- lda(donr ~ reg1 + reg2 + reg3 +reg4+ chld + incm + npro + plow + npro + I(hinc^2) + I(hinc),
+               # data = trainCenterScaled)
+lda.pred.train <- predict(lda.fit, trainCenterScaled)
+lda.pred.valid <- predict(lda.fit,validCenterScaled)
+roc.lda.train <- pROC::roc(response = trainCenterScaled$donr, predictor = lda.pred.train$posterior[,2])
+auc.lda.train <- round(pROC::auc(roc.lda.train),2)
+roc.lda.valid <- pROC::roc(response = validCenterScaled$donr, predictor = lda.pred.valid$posterior[,2])
+auc.lda.valid <- round(pROC::auc(roc.lda.valid),2)
+par(mfrow = c(1,2))
+plot(roc.lda.train,legacy.axes = T,asp = NA, col = 'blue')
+plot(roc.lda.valid,legacy.axes = T,asp = NA, col = 'red',add = T)
+legend("bottomright",legend = c(paste0("Train; AUC:",auc.lda.train), paste0("validation; AUC:",auc.lda.valid)), col = c("blue", "red"), lty = 1,cex = 0.6)
+Results.lda <- ProfitabilityMatrix(Validation$donr,lda.pred.valid$posterior[,2],"LDA")
+```
+
+```{r}
+Profitability <- rbind(Profitability,Results.lda$outdf)
+knitr::kable(Profitability, caption = "Mails for campaign & profitability")
+Results.lda$ConfusionMatrix
+```
+
+### 5.3.2 Quadratic Discriminant Analysis (QDA)
+
+In this section, we use a quadratic fit. In order to prevent over fitting, we use the predictors that were deemed important from the variable importnace plot above. This model performs poorly compared to LDA.
+
+
+```{r,fig.cap = "Left: ROC curve of QDA. Right: Profitability chart when QDA is used for prediction", fig.height=3}
+#*****************************************************
+# Quadratic discriminat analysis
+#****************************************************
+
+qda.fit <- qda(donr ~ chld + wrat  + I(hinc) + npro + tdon + home + reg2 + inca, data = trainCenterScaled )
+#qda.fit <- qda(donr ~ . + I(hinc^2)-damt,data = trainCenterScaled)
+qda.pred.train <- predict(qda.fit, trainCenterScaled)
+qda.pred.valid <- predict(qda.fit,validCenterScaled)
+roc.qda.train <- pROC::roc(response = trainCenterScaled$donr, predictor = qda.pred.train$posterior[,2])
+auc.qda.train <- round(pROC::auc(roc.qda.train),2)
+roc.qda.valid <- pROC::roc(response = validCenterScaled$donr, predictor = qda.pred.valid$posterior[,2])
+auc.qda.valid <- round(pROC::auc(roc.qda.valid),2)
+par(mfrow=c(1,2))
+plot(roc.qda.train,legacy.axes = T,asp = NA, col = 'blue')
+plot(roc.qda.valid,legacy.axes = T,asp = NA, col = 'red',add = T)
+legend("bottomright",legend = c(paste0("Train; AUC:",auc.qda.train), paste0("validation; AUC:",auc.qda.valid)), col = c("blue", "red"), lty = 1,cex = 0.6)
+Results.qda <- ProfitabilityMatrix(Validation$donr,qda.pred.valid$posterior[,2],"QDA")
+```
+
+```{r}
+
+Profitability <- rbind(Profitability,Results.qda$outdf)
+knitr::kable(Profitability, caption = "Mails for campaign & profitability")
+Results.qda$ConfusionMatrix
+```
+
+## 5.5 Partial Least Squares Discriminant Analysis (PLSDA)
+
+In QDA we attempted to minimize the number of featuers used, in order ot prevent over fitting. Also, all the features were used as predictors in LDA. It may be possible to get a better performance if we reduce the features used as predictors. Here we utilize the partial least squares method for LDA. The number of principal components is used as a tuning parameter. It was found using a 10 fold cross validation that 18 pricipal components yield the best ROC.
+The performance is poorer than the LDA, but better than QDA.
+
+The performance of the model is shown below.
+
+```{r,fig.cap = "Left: ROC curve of PLSDA. Right: Profitability chart when PLSDA is used for prediction" , fig.height=3}
+# Prep data for PLSDA
+
+ctrl <- trainControl(method = "cv", number = 10,
+                     savePredictions = T,
+                     summaryFunction = twoClassSummary,
+                     classProbs = T)
+
+trainCenterScaled.pls <- make_factor(trainCenterScaled)
+y <- as.factor(ifelse(train$donr == 1, "yes", "no"))
+plsdaModel <- train(x = trainCenterScaled[,c(-21,-22)],
+      y =  y,
+      method = "pls",
+      metric= "ROC",
+      tuneLength = 20,
+      trControl = ctrl
+      )
+
+plsPred.Train <- predict(plsdaModel, newdata = trainCenterScaled[,c(-21,-22)], type = "prob")
+plsPred.valid <- predict(plsdaModel, newdata = validCenterScaled[,c(-21,-22)], type = "prob")
+roc.pls.train <- pROC::roc(response = trainCenterScaled$donr, predictor = plsPred.Train[,2,1])
+roc.pls.valid <- pROC::roc(response = validCenterScaled$donr, predictor = plsPred.valid[,2,1])
+auc.pls.train <- round(pROC::auc(roc.pls.train),2)
+auc.pls.valid <- round(pROC::auc(roc.pls.valid),2)
+par(mfrow= c(1,2))
+plot(roc.pls.train,legacy.axes = T,asp = NA, col = 'blue')
+plot(roc.pls.valid,legacy.axes = T,asp = NA, col = 'red',add = T)
+legend("bottomright",legend = c(paste0("Train; AUC:",auc.pls.train), paste0("validation; AUC:",auc.pls.valid)), col = c("blue", "red"), lty = 1,cex = 0.6)
+Results.plsqda <- ProfitabilityMatrix(Validation$donr,plsPred.valid[,2,1],"PLSDA")
+Prifitability <- rbind(Profitability,Results.plsqda$outdf)
+
+knitr::kable(Profitability, caption = "Mails for campaign & profitability")
+Results.plsqda$ConfusionMatrix
+
+```
+
+## 5.6 Support Vector Machine
+
+In this section we'll explore 2 kinds of Support vectors.
+    1. Non linear, radial kernel for non linear seperation
+    2. Linear kernel for linear hyperplane seperation
+    
+### 5.6.1 Radial Kernel
+
+The cost parameter is tuned using a 10 fold cross validation over the sequence 2^-10 to 2^4. The cost of 8 came out to be the best tuning for the radial kernel model. 
+
+
+```{r,fig.cap ="Left: ROC curve of SVM radial Kernel. Right: Profitability chart when SVM radial kernel is used for prediction"}
+# Train control setting
+
+sigmaRange <- kernlab::sigest(as.matrix(train[,Predictors]))
+svmGrid <- expand.grid(.sigma = sigmaRange[1], .C =2^(seq(-10,4)))
+y <- as.factor(ifelse(train$donr == 1, "yes", "no"))
+svmRModel <- train(train[,Predictors], y,
+                   method = "svmRadial",
+                   metric = "ROC",
+                   preProc = c("center", "scale"),
+                   tuneGrid = svmGrid,
+                   fit = F,
+                   trControl = ctrl )
+
+svmClassPred.Train <- kernlab::predict(svmRModel, newdata = train[,Predictors])
+svmClassPred.Train <- ifelse(svmClassPred.Train == "yes",1,0)
+svmPredProb.Train <- kernlab::predict(svmRModel, newdata = train[,Predictors], type = "prob")
+
+svmClassPred.Valid <- kernlab::predict(svmRModel, newdata = validCenterScaled[,Predictors])
+svmClassPred.Valid <- ifelse(svmClassPred.Valid == "yes",1,0)
+svmPredProb.Valid <- kernlab::predict(svmRModel, newdata = validCenterScaled[,Predictors], type = "prob")
+
+roc.svm.train <- pROC::roc(response = train$donr, predictor = svmPredProb.Train[,2])
+roc.svm.Valid <- pROC::roc(response = Validation$donr, predictor = svmPredProb.Valid[,2])
+auc.svm.train <- round(pROC::auc(roc.svm.train),2)
+auc.svm.valid <- round(pROC::auc(roc.svm.Valid),2)
+par(mfrow = c(1,2))
+plot(roc.svm.train,legacy.axes = T,asp = NA, col = 'blue')
+plot(roc.svm.Valid,legacy.axes = T,asp = NA, col = 'red',add = T)
+legend("bottomright",legend = c(paste0("Train; AUC:",auc.svm.train), paste0("validation; AUC:",auc.svm.valid)), col = c("blue", "red"), lty = 1,cex = 0.6)
+Results.svm <- ProfitabilityMatrix(Validation$donr,svmPredProb.Valid[,2],"SVM")
+```
+
+```{r}
+
+Profitability <- rbind(Profitability,Results.svm$outdf)
+knitr::kable(Profitability, caption = "Mails for campaign & profitability" )
+Results.svm$ConfusionMatrix
+```
+
+### 5.6.2 SVM Linear Kernel
+
+A 10 fold cross validation is used to tune the cost parameter. The optimal parameters were cost = 1, gamma = 0.67.
+
+The model resuls were poorer compared to the the radial kernel
+
+```{r,fig.cap ="Left: ROC curve of SVM linear Kernel. Right: Profitability chart when SVM linear kernel is used for prediction"}
+library(e1071)
+tune.out <- tune(svm, train.y= y, train.x = trainCenterScaled[,Predictors],kernel = "linear", ranges = list(cost = c(0.001,0.01,0.1,1,5,10,100)))
+
+bestmod <- tune.out$best.model
+svmfitLinear <- svm(y ~ ., data = cbind(trainCenterScaled[,Predictors],y), kernel = "linear", cost = 1, gamma = 0.67, decision.values = T)
+svmLinProb.train <- attributes(predict(bestmod,trainCenterScaled[,Predictors], decision.values = T))$decision.values
+svmLinPred.train <- predict(bestmod,trainCenterScaled[,Predictors], decision.values = T)
+svmLinPred.train <- ifelse(svmLinPred.train == "yes",1,0)
+
+svmLinPredValid.Prob <- attributes(predict(bestmod,validCenterScaled[,Predictors], decision.values = T))$decision.values
+svmLinPred.Valid <- predict(bestmod,validCenterScaled[,Predictors], decision.values = T)
+svmLinPred.valid <- ifelse(svmLinPred.Valid == "yes",1,0)
+
+roc.svmL.train <- pROC::roc(response = train$donr, predictor = svmLinProb.train)
+roc.svmL.Valid <- pROC::roc(response = Validation$donr, predictor = svmLinPredValid.Prob)
+auc.svm.train <- round(pROC::auc(roc.svmL.train),2)
+auc.svm.valid <- round(pROC::auc(roc.svmL.Valid ),2)
+par(mfrow = c(1,2))
+plot(roc.svm.train,legacy.axes = T,asp = NA, col = 'blue')
+plot(roc.svm.Valid,legacy.axes = T,asp = NA, col = 'red',add = T)
+legend("bottomright",legend = c(paste0("Train; AUC:",auc.svm.train), paste0("validation; AUC:",auc.svm.valid)), col = c("blue", "red"), lty = 1,cex = 0.6)
+Results.svmlin <- ProfitabilityMatrix(Validation$donr,1-svmLinPredValid.Prob,"SVM Linear Kernel")
+
+
+```
+
+```{r}
+
+Profitability <- rbind(Profitability,Results.svmlin$outdf)
+knitr::kable(Profitability, caption = "Mails for campaign & profitability" )
+Results.svmlin$ConfusionMatrix
+```
+# 6. Predicting doners on the test data
+
+From the table above, the Random forest model provides us with the best profitability. We select Random Forest model to predict potential donors in the test data.
+
+After adjutment for upsampling in the validation set, there are 294 potential donors to which the non-profit organization should target for mail campaign.
+
+```{r}
+#**********************************
+# Setting up test data 
+#*********************************
+
+TestTrans <- bake(object = reciepe_trained, newdata = test)
+TestTrans <- make_factor(TestTrans)
+TestTrans$donr <- as.factor(TestTrans$donr)
+
+#********************************
+#    Prediction of test data
+#*******************************
+predictedClassProb.test <- predict(rf,newdata = TestTrans, type = "prob")
+predictedClassProb.test <- predictedClassProb.test[,2]
+
+n.mail.valid <- Profitability$Mails[which(Prifitability$Model == "RandomForest")]
+tr.rate <- .1 # typical response rate is .1
+vr.rate <- .5 # whereas validation response rate is .5
+n.test <- nrow(test)
+n.valid.c <- nrow(Validation)
+adj.test.1 <- (n.mail.valid/n.valid.c)/(vr.rate/tr.rate) # adjustment for mail yes
+adj.test.0 <- ((n.valid.c-n.mail.valid)/n.valid.c)/((1-vr.rate)/(1-tr.rate)) # adjustment for mail no
+adj.test <- adj.test.1/(adj.test.1+adj.test.0) # scale into a proportion
+n.mail.test <- round(n.test*adj.test, 0) # calculate number of mailings for test set
+
+
+cutoff.test <- sort(predictedClassProb.test , decreasing=T)[n.mail.test+1]
+chat.test <- ifelse(predictedClassProb.test>cutoff.test, 1, 0) # mail to everyone above the cutoff
+table(chat.test)
+```
+

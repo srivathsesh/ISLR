@@ -158,3 +158,85 @@ hist(test[Direc=="Up"],freq = F)
 hist(test[Direc=="Down"], freq = F)
 ```
 
+## Prediction
+
+```{r}
+lda.pred <- predict(lda.fit,Smarket[!train,])
+lda.class <- lda.pred$class
+caret::confusionMatrix(lda.class, Smarket[!train,"Direction"], positive = "Up")
+```
+
+## Recreate prediction by adjusting the threshold on the posterior probability
+
+```{r}
+head(lda.pred$posterior)
+sum(lda.pred$posterior[,2] > 0.5)
+sum(lda.pred$posterior[,2] <= 0.5)
+head(as_tibble(data_frame(class = lda.pred$class,lda.pred$posterior[,2])))
+
+min(lda.pred$posterior[,1])
+```
+
+## 4.6.4 Quadratic Discriminant Analysis
+
+```{r}
+qda.fit <- qda(Direction ~ Lag1 + Lag2, data = Smarket, subset = train)
+qda.fit
+
+qda.pred <- predict(qda.fit,Smarket[!train,])
+caret::confusionMatrix(qda.pred$class, Smarket[!train,"Direction"], positive = "Up")
+```
+
+## KNN
+
+```{r}
+library(class)
+x.train <- model.matrix(Direction ~ Lag1 + Lag2 , data = Smarket[train,])[,-1]
+x.test <- model.matrix(Direction ~ Lag1 + Lag2 , data = Smarket[!train,])[,-1]
+train.direction <- Smarket[train,"Direction"]
+
+set.seed(1)
+knn.pred <- knn(train = x.train,test = x.test,cl = train.direction,k = 3)
+caret::confusionMatrix(knn.pred,Smarket[!train,"Direction"], positive = "Up")
+```
+
+## insurance data
+
+```{r}
+Caravan <- ISLR::Caravan
+standarized.x <- scale(Caravan[,-86])
+test <- 1:1000
+train.x <- standarized.x[-test,]
+test.x <- standarized.x[test,]
+train.Y <- Caravan$Purchase[-test]
+test.Y <- Caravan$Purchase[test]
+
+set.seed(1)
+knn.pred <- knn(train = train.x,test = test.x,cl = train.Y, k = 5)
+caret::confusionMatrix(knn.pred,test.Y,positive = "Yes")
+```
+
+```{r}
+glm.fit.caravan <- glm(Purchase ~ ., data = Caravan[-test,], family = "binomial")
+summary(glm.fit.caravan)
+glm.prob.caravan <- predict(glm.fit.caravan, newdata = Caravan[test,], type = "response")
+glm.pred.caravan <- rep("No", 1000)
+glm.pred.caravan[glm.prob.caravan > 0.5/2] <- "Yes"
+caret::confusionMatrix(glm.pred.caravan,Caravan[test,"Purchase"], positive = "Yes")
+```
+
+
+```{r}
+lda.fit=lda(Purchase~.,data=Caravan,subset=-test)
+
+lda.probs=predict(lda.fit, Caravan[test,])$posterior[,2]
+
+lda.pred=rep("No",1000)
+
+lda.pred[lda.probs>.25]="Yes"
+
+table(lda.pred,test.Y)
+
+caret::confusionMatrix(lda.pred,test.Y,positive = "Yes")
+```
+
